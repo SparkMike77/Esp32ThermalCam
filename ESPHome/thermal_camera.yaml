@@ -1,0 +1,294 @@
+# ============================================================
+#  ESPHome – MLX90640 Thermal Camera on TTGO T-Display
+#  Board  : LILYGO TTGO T-Display (ESP32, ST7789V 240×135)
+#  Sensor : Melexis MLX90640 32×24 thermal array (I2C)
+#
+#  Layout (landscape = 240×135 px):
+#
+#   ┌──────────────────────────────────────────┐
+#   │  Thermal image       │  Sidebar          │
+#   │  128×128 px          │  112×135 px       │
+#   │  (32×4 = 128 wide)   │  temp readouts    │
+#   │  (24×4 = 96  tall,   │  WiFi             │
+#   │   centred vertically)│  uptime           │
+#   └──────────────────────────────────────────┘
+#
+#  Image block is centred vertically in the 135-px height:
+#    top offset = (135 - 96) / 2 = 19 px
+#
+# ============================================================
+
+esphome:
+  name: thermal-cam
+  friendly_name: "Thermal Camera"
+  platform: ESP32
+  board: esp32dev
+  flash_size: 16MB          # Remove / change to 4MB if you have the 4MB board
+  libraries:
+    - Wire
+    - FS
+
+  # Pull in our custom component source
+  includes:
+    - components/mlx90640_display/mlx90640_display.h
+
+# ---- Logging -----------------------------------------------
+logger:
+  level: DEBUG
+
+# ---- Home Assistant API ------------------------------------
+api:
+
+# ---- OTA ---------------------------------------------------
+ota:
+  - platform: esphome
+
+# ---- WiFi --------------------------------------------------
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+captive_portal:
+
+# ---- Preferences (persist backlight dim level) -------------
+preferences:
+  flash_write_interval: 10s
+
+# ---- Global variables --------------------------------------
+globals:
+  - id: wifi_was_online
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+# ---- External custom component -----------------------------
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [mlx90640_display]
+
+# ---- MLX90640 thermal sensor -------------------------------
+#
+#  WIRING for TTGO T-Display + MLX90640:
+#    MLX90640 SDA → GPIO21
+#    MLX90640 SCL → GPIO22
+#    MLX90640 VDD → 3.3V
+#    MLX90640 GND → GND
+#
+#  NOTE: The T-Display's I2C pins (GPIO21/22) conflict with
+#  its built-in SPI display ONLY if you initialise I2C and
+#  SPI on the same pins — they are separate buses so this
+#  is fine as long as you don't remap them.
+#
+mlx90640_display:
+  id: thermal_cam
+  sda: 21
+  scl: 22
+  frequency: 400000          # 400 kHz fast-mode
+  address: 0x33              # MLX90640 default address
+  mintemp: 15                # °C – lower bound for colour scale
+  maxtemp: 40                # °C – upper bound for colour scale
+  refresh_rate: 0x04         # 0x04 = 8 Hz  |  0x05 = 16 Hz
+  update_interval: 200ms     # How often ESPHome calls update() → matches 8 Hz
+
+  # These become Home Assistant sensor entities automatically:
+  min_temperature:
+    name: "Thermal Min °C"
+  max_temperature:
+    name: "Thermal Max °C"
+  mean_temperature:
+    name: "Thermal Mean °C"
+
+# ---- Optional: BME280 or similar for sidebar readings ------
+# Uncomment and wire up a BME280 on the same I2C bus if desired
+#
+# bme280_i2c:
+#   - address: 0x76
+#     temperature:
+#       name: "Ambient Temperature"
+#       id: ambient_temp
+#     humidity:
+#       name: "Ambient Humidity"
+#       id: ambient_humidity
+#     update_interval: 10s
+
+# ---- WiFi signal strength (for sidebar) --------------------
+sensor:
+  - platform: wifi_signal
+    name: "WiFi Signal dBm"
+    id: wifi_signal_db
+    update_interval: 5s
+
+# ---- Backlight PWM (allows dimming) ------------------------
+output:
+  - platform: ledc
+    pin: GPIO4
+    id: display_backlight_pwm
+
+light:
+  - platform: monochromatic
+    output: display_backlight_pwm
+    name: "Display Backlight"
+    id: back_light
+    restore_mode: RESTORE_AND_ON
+
+# ---- Push buttons ------------------------------------------
+binary_sensor:
+  - platform: gpio
+    name: "Button Left"
+    id: button_left
+    pin:
+      number: GPIO0
+      inverted: true
+      mode: { input: true, pullup: true }
+    filters:
+      - delayed_on: 10ms
+      - delayed_off: 10ms
+    on_press:
+      - light.dim_relative:
+          id: back_light
+          relative_brightness: -10%
+          transition_length: 0.1s
+          brightness_limits: { min_brightness: 20% }
+
+  - platform: gpio
+    name: "Button Right"
+    id: button_right
+    pin:
+      number: GPIO35
+      inverted: true
+      mode: { input: true }
+    filters:
+      - delayed_on: 10ms
+      - delayed_off: 10ms
+    on_press:
+      - light.dim_relative:
+          id: back_light
+          relative_brightness: 10%
+          transition_length: 0.1s
+
+# ---- SPI (display) -----------------------------------------
+spi:
+  clk_pin:  GPIO18
+  mosi_pin: GPIO19
+
+# ---- Fonts -------------------------------------------------
+font:
+  - file:
+      type: gfonts
+      family: Roboto Mono
+      weight: 400
+    id: font_small
+    size: 12
+  - file:
+      type: gfonts
+      family: Roboto Mono
+      weight: 700
+    id: font_med
+    size: 14
+
+# ---- Colors ------------------------------------------------
+color:
+  - id: C_WHITE
+    red: 100%; green: 100%; blue: 100%
+  - id: C_BLACK
+    red: 0%; green: 0%; blue: 0%
+  - id: C_GRAY
+    red: 40%; green: 40%; blue: 40%
+  - id: C_CYAN
+    red: 0%; green: 100%; blue: 100%
+  - id: C_YELLOW
+    red: 100%; green: 100%; blue: 0%
+  - id: C_RED
+    red: 100%; green: 0%; blue: 0%
+  - id: C_GREEN
+    red: 0%; green: 100%; blue: 0%
+
+# ---- Display -----------------------------------------------
+#
+#  In rotation: 90° the logical canvas is 240 px wide × 135 px tall.
+#
+#  Thermal image block:
+#    Scale factor: 4  →  32×4 = 128 px wide, 24×4 = 96 px tall
+#    X origin: 0  (left edge)
+#    Y origin: (135 - 96) / 2 = 19 px (vertically centred)
+#
+#  Sidebar:
+#    X origin: 132  (128 + 4 px gap)
+#    Width:    108 px
+#
+display:
+  - platform: st7789v
+    model: TTGO TDisplay 135x240
+    id: tft
+    cs_pin:         GPIO5
+    dc_pin:         GPIO16
+    reset_pin:      GPIO23
+    backlight_pin:  no         # controlled via light component above
+    rotation: 90°
+    update_interval: 150ms     # ~6-7 fps; raise to 500ms to save CPU
+
+    lambda: |-
+      // ── Constants ──────────────────────────────────────────
+      const int SCALE   = 4;          // each MLX pixel → 4×4 screen pixels
+      const int IMG_W   = 32 * SCALE; // 128 px
+      const int IMG_H   = 24 * SCALE; //  96 px
+      const int IMG_X   = 0;
+      const int IMG_Y   = (135 - IMG_H) / 2;  // 19 px top margin
+      const int SB_X    = IMG_W + 4;  // sidebar starts at x=132
+      const int SB_W    = 240 - SB_X; // 108 px wide
+
+      using namespace esphome::mlx90640_display;
+
+      float t_min = id(thermal_cam).get_min_temp();
+      float t_max = id(thermal_cam).get_max_temp();
+
+      // ── Draw thermal image ──────────────────────────────────
+      for (int row = 0; row < 24; row++) {
+        for (int col = 0; col < 32; col++) {
+          float temp = id(thermal_cam).get_pixel(col, row);
+          esphome::Color c = MLX90640DisplayComponent::temp_to_color(temp, t_min, t_max);
+          it.filled_rectangle(
+            IMG_X + col * SCALE,
+            IMG_Y + row * SCALE,
+            SCALE, SCALE, c
+          );
+        }
+      }
+
+      // ── Colour scale bar (left edge, vertical) ─────────────
+      // Thin 4×96 px gradient bar immediately left of image, same height
+      // (skip if image starts at x=0; draw it on the right of image instead)
+      // We'll draw a 4px bar at IMG_X + IMG_W  (inside the 4px gap)
+      for (int py = 0; py < IMG_H; py++) {
+        float frac = 1.0f - (float)py / (float)(IMG_H - 1); // top=hot, bottom=cold
+        float t    = t_min + frac * (t_max - t_min);
+        esphome::Color c = MLX90640DisplayComponent::temp_to_color(t, t_min, t_max);
+        it.filled_rectangle(IMG_W, IMG_Y + py, 4, 1, c);
+      }
+
+      // ── Sidebar background ──────────────────────────────────
+      it.filled_rectangle(SB_X, 0, SB_W, 135, id(C_BLACK));
+
+      // ── Sidebar: title ──────────────────────────────────────
+      it.print(SB_X + 4, 2, id(font_med), id(C_CYAN), "THERMAL");
+
+      // ── Sidebar: min / max / mean temps ────────────────────
+      it.printf(SB_X + 4,  20, id(font_small), id(C_GRAY),  "MIN");
+      it.printf(SB_X + 4,  32, id(font_small), id(C_WHITE), "%.1f C", id(thermal_cam).get_min_detected());
+
+      it.printf(SB_X + 4,  50, id(font_small), id(C_GRAY),  "MAX");
+      it.printf(SB_X + 4,  62, id(font_small), id(C_RED),   "%.1f C", id(thermal_cam).get_max_detected());
+
+      // ── Sidebar: scale range ────────────────────────────────
+      it.printf(SB_X + 4,  80, id(font_small), id(C_GRAY),  "SCALE");
+      it.printf(SB_X + 4,  92, id(font_small), id(C_YELLOW),"%.0f-%.0f", t_min, t_max);
+
+      // ── Sidebar: WiFi signal ────────────────────────────────
+      int sig = (int)id(wifi_signal_db).state;
+      it.printf(SB_X + 4, 110, id(font_small), id(C_GRAY),  "WiFi");
+      it.printf(SB_X + 4, 122, id(font_small), id(C_GREEN), "%d dBm", sig);
+
+      // ── Image border ────────────────────────────────────────
+      it.rectangle(IMG_X, IMG_Y, IMG_W, IMG_H, id(C_GRAY));

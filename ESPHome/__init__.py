@@ -1,0 +1,1 @@
+# ESPHome custom component registration
